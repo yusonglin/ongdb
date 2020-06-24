@@ -21,7 +21,10 @@ package org.neo4j.annotations.api;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
+<<<<<<< HEAD
 import java.io.Writer;
+=======
+>>>>>>> neo4j/4.1
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -31,6 +34,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.TreeSet;
+<<<<<<< HEAD
+=======
+import java.util.stream.Stream;
+>>>>>>> neo4j/4.1
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.ProcessingEnvironment;
 import javax.annotation.processing.RoundEnvironment;
@@ -165,10 +172,16 @@ public class PublicApiAnnotationProcessor extends AbstractProcessor
 
             // Write new signature
             final FileObject file = processingEnv.getFiler().createResource( CLASS_OUTPUT, "", GENERATED_SIGNATURE_DESTINATION );
+<<<<<<< HEAD
             try ( Writer writer = file.openWriter();
                     BufferedWriter out = new BufferedWriter( writer ) )
             {
                 out.write( newSignature );
+=======
+            try ( BufferedWriter writer = new BufferedWriter( file.openWriter() ) )
+            {
+                writer.write( newSignature );
+>>>>>>> neo4j/4.1
             }
 
             if ( !testExecution )
@@ -196,8 +209,20 @@ public class PublicApiAnnotationProcessor extends AbstractProcessor
                 String oldSignature = Files.readString( oldSignaturePath, UTF_8 );
                 if ( !oldSignature.equals( newSignature ) )
                 {
+<<<<<<< HEAD
                     error( format( "Public API signature mismatch. The generated signature, %s, does not match the old signature in %s.%n" +
                             "Specify `-Doverwrite` to maven to replace it.", path, oldSignaturePath ) );
+=======
+                    oldSignature = oldSignature.replace( "\r\n", "\n" );
+                    newSignature = newSignature.replace( "\r\n", "\n" );
+                    if ( !oldSignature.equals( newSignature ) )
+                    {
+                        StringBuilder diff = diff( oldSignaturePath );
+                        error( format( "Public API signature mismatch. The generated signature, %s, does not match the old signature in %s.%n" +
+                                "Specify `-Doverwrite` to maven to replace it. Changed public elements, compared to the committed PublicApi.txt:%n%s%n",
+                                path, oldSignaturePath, diff ) );
+                    }
+>>>>>>> neo4j/4.1
                 }
                 else
                 {
@@ -207,12 +232,43 @@ public class PublicApiAnnotationProcessor extends AbstractProcessor
         }
     }
 
+<<<<<<< HEAD
+=======
+    private StringBuilder diff( Path oldSignaturePath ) throws IOException
+    {
+        Set<String> oldLines = new HashSet<>();
+        try ( Stream<String> lines = Files.lines( oldSignaturePath, UTF_8 ) )
+        {
+            lines.forEach( oldLines::add );
+        }
+        StringBuilder diff = new StringBuilder();
+        diffSide( diff, oldLines, publicElements, '-' );
+        diffSide( diff, publicElements, oldLines, '+' );
+        return diff;
+    }
+
+    private void diffSide( StringBuilder diff, Set<String> left, Set<String> right, char diffSign )
+    {
+        for ( String oldPublicElement : left )
+        {
+            if ( !right.contains( oldPublicElement ) )
+            {
+                diff.append( diffSign ).append( oldPublicElement ).append( format( "%n" ) );
+            }
+        }
+    }
+
+>>>>>>> neo4j/4.1
     private static Path getAndAssertParent( Path path, String name )
     {
         Path parent = path.getParent();
         if ( !parent.getFileName().toString().equals( name ) )
         {
+<<<<<<< HEAD
             throw new IllegalStateException( path.toAbsolutePath().toString() + " parent is not " + name );
+=======
+            throw new IllegalStateException( path.toAbsolutePath() + " parent is not " + name );
+>>>>>>> neo4j/4.1
         }
         return parent;
     }
@@ -261,17 +317,29 @@ public class PublicApiAnnotationProcessor extends AbstractProcessor
                 case ENUM:
                 case INTERFACE:
                 case CLASS:
+<<<<<<< HEAD
                     pushScope( "." + element.getSimpleName().toString() );
+=======
+                    pushScope( "." + element.getSimpleName() );
+>>>>>>> neo4j/4.1
                     processType( (TypeElement) element );
                     break;
                 case ENUM_CONSTANT:
                 case FIELD:
+<<<<<<< HEAD
                     pushScope( "#" + element.toString() );
+=======
+                    pushScope( "#" + element );
+>>>>>>> neo4j/4.1
                     processField( (VariableElement) element );
                     break;
                 case CONSTRUCTOR:
                 case METHOD:
+<<<<<<< HEAD
                     pushScope( "::" + element.toString() );
+=======
+                    pushScope( "::" + element );
+>>>>>>> neo4j/4.1
                     processMethod( (ExecutableElement) element );
                     break;
                 default:
@@ -390,7 +458,11 @@ public class PublicApiAnnotationProcessor extends AbstractProcessor
         {
             return typeParameter.toString();
         }
+<<<<<<< HEAD
         return typeParameter.toString() + " extends " + String.join( " & ", bounds );
+=======
+        return typeParameter + " extends " + String.join( " & ", bounds );
+>>>>>>> neo4j/4.1
     }
 
     private void addFieldName( StringBuilder sb, VariableElement variableElement )
@@ -492,7 +564,11 @@ public class PublicApiAnnotationProcessor extends AbstractProcessor
         if ( kind == TypeKind.TYPEVAR )
         {
             TypeVariable typeVariable = (TypeVariable) type;
+<<<<<<< HEAD
             return "#" + typeVariable.toString();
+=======
+            return "#" + typeVariable;
+>>>>>>> neo4j/4.1
         }
         if ( kind == TypeKind.DECLARED )
         {

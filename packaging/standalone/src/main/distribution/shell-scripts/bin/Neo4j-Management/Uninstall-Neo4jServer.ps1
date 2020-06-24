@@ -1,9 +1,9 @@
-# Copyright (c) 2002-2020 "Neo4j"
+# Copyright (c) 2002-2020 "Neo4j,"
 # Neo4j Sweden AB [http://neo4j.com]
 #
-# This file is part of ONgDB.
+# This file is part of Neo4j.
 #
-# ONgDB is free software: you can redistribute it and/or modify
+# Neo4j is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
@@ -35,7 +35,7 @@ Uninstall the Neo4j Windows Windows Service for the Neo4j installation at $Serve
 .OUTPUTS
 System.Int32
 0 = Service is uninstalled or did not exist
-non-zero = an error occured
+non-zero = an error occurred
 
 .NOTES
 This function is private to the powershell module

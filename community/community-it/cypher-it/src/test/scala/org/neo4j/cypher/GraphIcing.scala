@@ -23,21 +23,29 @@ import java.util
 import java.util.concurrent.TimeUnit
 
 import org.neo4j.cypher.internal.javacompat.GraphDatabaseCypherService
-import org.neo4j.cypher.internal.runtime.{RuntimeJavaValueConverter, isGraphKernelResultValue}
+import org.neo4j.cypher.internal.runtime.RuntimeJavaValueConverter
+import org.neo4j.cypher.internal.runtime.isGraphKernelResultValue
+import org.neo4j.graphdb.Direction
+import org.neo4j.graphdb.Label
 import org.neo4j.graphdb.Label.label
-import org.neo4j.graphdb._
-import org.neo4j.graphdb.schema.{ConstraintDefinition, ConstraintType, IndexDefinition}
+import org.neo4j.graphdb.Node
+import org.neo4j.graphdb.RelationshipType
+import org.neo4j.graphdb.Result
+import org.neo4j.graphdb.schema.ConstraintDefinition
+import org.neo4j.graphdb.schema.ConstraintType
+import org.neo4j.graphdb.schema.IndexDefinition
 import org.neo4j.internal.helpers.collection.Iterables
 import org.neo4j.internal.kernel.api.security.LoginContext.AUTH_DISABLED
 import org.neo4j.kernel.GraphDatabaseQueryService
 import org.neo4j.kernel.api.KernelTransaction.Type
 import org.neo4j.kernel.impl.coreapi.InternalTransaction
 import org.neo4j.kernel.impl.factory.GraphDatabaseFacade
-import org.neo4j.kernel.impl.query._
+import org.neo4j.kernel.impl.query.Neo4jTransactionalContextFactory
+import org.neo4j.kernel.impl.query.TransactionalContext
 import org.neo4j.kernel.impl.transaction.stats.DatabaseTransactionStats
 import org.neo4j.kernel.impl.util.ValueUtils.asMapValue
 
-import scala.collection.JavaConverters._
+import scala.collection.JavaConverters.iterableAsScalaIterableConverter
 
 trait GraphIcing {
 
@@ -207,7 +215,7 @@ trait GraphIcing {
     }
 
     // Runs code inside of a transaction. Will mark the transaction as successful if no exception is thrown
-    def inTx[T](f: InternalTransaction => T, txType: Type = Type.`implicit`): T = withTx(f, txType)
+    def inTx[T](f: InternalTransaction => T, txType: Type = Type.IMPLICIT): T = withTx(f, txType)
 
     def inTx[T](f: => T): T = inTx(_ => f)
 
@@ -225,7 +233,7 @@ trait GraphIcing {
     }
 
     // Runs code inside of a transaction. Will mark the transaction as successful if no exception is thrown
-    def withTx[T](f: InternalTransaction => T, txType: Type = Type.`implicit`): T = {
+    def withTx[T](f: InternalTransaction => T, txType: Type = Type.IMPLICIT): T = {
       val tx = graph.beginTransaction(txType, AUTH_DISABLED)
       try {
         val result = f(tx)
@@ -240,7 +248,7 @@ trait GraphIcing {
     }
 
     def rollback[T](f: InternalTransaction => T): T = {
-      val tx = graph.beginTransaction(Type.`implicit`, AUTH_DISABLED)
+      val tx = graph.beginTransaction(Type.IMPLICIT, AUTH_DISABLED)
       try {
         val result = f(tx)
         tx.rollback()

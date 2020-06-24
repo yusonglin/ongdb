@@ -33,20 +33,24 @@ import java.util.function.Function;
 
 import org.neo4j.index.internal.gbptree.TreeFileNotFoundException;
 import org.neo4j.internal.helpers.Exceptions;
-import org.neo4j.io.pagecache.IOLimiter;
 import org.neo4j.io.pagecache.PageCache;
+import org.neo4j.io.pagecache.tracing.DefaultPageCacheTracer;
+import org.neo4j.io.pagecache.tracing.PageCacheTracer;
+import org.neo4j.io.pagecache.tracing.cursor.PageCursorTracer;
+import org.neo4j.kernel.api.index.IndexSample;
 import org.neo4j.kernel.lifecycle.LifeSupport;
-import org.neo4j.register.Register.DoubleLongRegister;
 import org.neo4j.test.Race;
 import org.neo4j.test.extension.Inject;
 import org.neo4j.test.extension.pagecache.EphemeralPageCacheExtension;
 import org.neo4j.test.rule.TestDirectory;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.neo4j.annotations.documented.ReporterFactories.noopReporterFactory;
 import static org.neo4j.index.internal.gbptree.RecoveryCleanupWorkCollector.immediate;
-import static org.neo4j.register.Registers.newDoubleLongRegister;
+import static org.neo4j.io.pagecache.IOLimiter.UNLIMITED;
 import static org.neo4j.test.Race.throwing;
 
 @EphemeralPageCacheExtension
@@ -60,11 +64,12 @@ class IndexStatisticsStoreTest
     private TestDirectory testDirectory;
 
     private IndexStatisticsStore store;
+    private final PageCacheTracer pageCacheTracer = PageCacheTracer.NULL;
 
     @BeforeEach
     void start()
     {
-        store = openStore();
+        store = openStore( pageCacheTracer, "stats" );
         lifeSupport.start();
     }
 
@@ -74,10 +79,71 @@ class IndexStatisticsStoreTest
         lifeSupport.shutdown();
     }
 
-    private IndexStatisticsStore openStore()
+    private IndexStatisticsStore openStore( PageCacheTracer pageCacheTracer, String fileName )
     {
-        return lifeSupport.add(
-                new IndexStatisticsStore( pageCache, testDirectory.file( "stats" ), immediate(), false ) );
+        var statisticsStore = new IndexStatisticsStore( pageCache, testDirectory.file( fileName ), immediate(), false, pageCacheTracer );
+        return lifeSupport.add( statisticsStore );
+    }
+
+    @Test
+    void tracePageCacheAccessOnConsistencyCheck() throws IOException
+    {
+        var cacheTracer = new DefaultPageCacheTracer();
+
+        var store = openStore( cacheTracer, "consistencyCheck" );
+        try ( var cursorTracer = cacheTracer.createPageCursorTracer( "tracePageCacheAccessOnConsistencyCheck" ) )
+        {
+            for ( int i = 0; i < 100; i++ )
+            {
+                store.replaceStats( i, new IndexSample() );
+            }
+            store.checkpoint( UNLIMITED, PageCursorTracer.NULL );
+            store.consistencyCheck( noopReporterFactory(), cursorTracer );
+
+            assertThat( cursorTracer.pins() ).isEqualTo( 16 );
+            assertThat( cursorTracer.unpins() ).isEqualTo( 16 );
+            assertThat( cursorTracer.hits() ).isEqualTo( 16 );
+        }
+    }
+
+    @Test
+    void tracePageCacheAccessOnStatisticStoreInitialisation()
+    {
+        var cacheTracer = new DefaultPageCacheTracer();
+
+        assertThat( cacheTracer.pins() ).isZero();
+        assertThat( cacheTracer.unpins() ).isZero();
+        assertThat( cacheTracer.hits() ).isZero();
+        assertThat( cacheTracer.faults() ).isZero();
+
+        openStore( cacheTracer, "tracedStats" );
+
+        assertThat( cacheTracer.faults() ).isEqualTo( 5 );
+        assertThat( cacheTracer.pins() ).isEqualTo( 14 );
+        assertThat( cacheTracer.unpins() ).isEqualTo( 14 );
+        assertThat( cacheTracer.hits() ).isEqualTo( 9 );
+    }
+
+    @Test
+    void tracePageCacheAccessOnCheckpoint() throws IOException
+    {
+        var cacheTracer = new DefaultPageCacheTracer();
+
+        var store = openStore( cacheTracer, "checkpoint" );
+
+        try ( var cursorTracer = cacheTracer.createPageCursorTracer( "tracePageCacheAccessOnCheckpoint" ) )
+        {
+            for ( int i = 0; i < 100; i++ )
+            {
+                store.replaceStats( i, new IndexSample() );
+            }
+
+            store.checkpoint( UNLIMITED, cursorTracer );
+            assertThat( cursorTracer.pins() ).isEqualTo( 43 );
+            assertThat( cursorTracer.unpins() ).isEqualTo( 43 );
+            assertThat( cursorTracer.hits() ).isEqualTo( 35 );
+            assertThat( cursorTracer.faults() ).isEqualTo( 8 );
+        }
     }
 
     @Test
@@ -86,36 +152,9 @@ class IndexStatisticsStoreTest
         // given
         long indexId = 4;
 
-        // when
-        store.replaceStats( indexId, 123, 456, 0, 0 );
-
-        // then
-        assertRegister( 123, 456, store.indexSample( indexId, newDoubleLongRegister() ) );
-
-        // and when
-        store.replaceStats( indexId, 444, 555, 0, 0 );
-
-        // then
-        assertRegister( 444, 555, store.indexSample( indexId, newDoubleLongRegister() ) );
-    }
-
-    @Test
-    void shouldReplaceIndexStatistics()
-    {
-        // given
-        long indexId = 4;
-
-        // when
-        store.replaceStats( indexId, 0, 0, 123, 456 );
-
-        // then
-        assertRegister( 123, 456, store.indexUpdatesAndSize( indexId, newDoubleLongRegister() ) );
-
-        // and when
-        store.replaceStats( indexId, 0, 0, 444, 555 );
-
-        // then
-        assertRegister( 444, 555, store.indexUpdatesAndSize( indexId, newDoubleLongRegister() ) );
+        // when/then
+        replaceAndVerifySample( indexId, new IndexSample( 456, 123, 456, 3 ) );
+        replaceAndVerifySample( indexId, new IndexSample( 555, 444, 550, 0 ) );
     }
 
     @Test
@@ -123,13 +162,16 @@ class IndexStatisticsStoreTest
     {
         // given
         long indexId = 4;
-        store.replaceStats( indexId, 0, 0, 123, 456 );
+        IndexSample initialSample = new IndexSample( 456, 5, 200, 123 );
+        store.replaceStats( indexId, initialSample );
 
         // when
-        store.incrementIndexUpdates( indexId, 5 );
+        int addedUpdates = 5;
+        store.incrementIndexUpdates( indexId, addedUpdates );
 
         // then
-        assertRegister( 123 + 5, 456, store.indexUpdatesAndSize( indexId, newDoubleLongRegister() ) );
+        assertEquals( new IndexSample( initialSample.indexSize(), initialSample.uniqueValues(), initialSample.sampleSize(),
+                initialSample.updates() + addedUpdates ), store.indexSample( indexId ) );
     }
 
     @Test
@@ -138,25 +180,25 @@ class IndexStatisticsStoreTest
         // given
         long indexId1 = 1;
         long indexId2 = 2;
-        store.replaceStats( indexId1, 100, 200, 15, 20 );
-        store.replaceStats( indexId2, 200, 300, 25, 35 );
+        IndexSample sample1 = new IndexSample( 500, 100, 200, 25 );
+        IndexSample sample2 = new IndexSample( 501, 101, 201, 26 );
+        store.replaceStats( indexId1, sample1 );
+        store.replaceStats( indexId2, sample2 );
 
         // when
         restartStore();
 
         // then
-        assertRegister( 15, 20, store.indexUpdatesAndSize( indexId1, newDoubleLongRegister() ) );
-        assertRegister( 25, 35, store.indexUpdatesAndSize( indexId2, newDoubleLongRegister() ) );
-        assertRegister( 100, 200, store.indexSample( indexId1, newDoubleLongRegister() ) );
-        assertRegister( 200, 300, store.indexSample( indexId2, newDoubleLongRegister() ) );
+        assertEquals( sample1, store.indexSample( indexId1 ) );
+        assertEquals( sample2, store.indexSample( indexId2 ) );
     }
 
     private void restartStore() throws IOException
     {
-        store.checkpoint( IOLimiter.UNLIMITED );
+        store.checkpoint( UNLIMITED, PageCursorTracer.NULL );
         lifeSupport.shutdown();
         lifeSupport = new LifeSupport();
-        store = openStore();
+        store = openStore( pageCacheTracer, "stats" );
         lifeSupport.start();
     }
 
@@ -168,14 +210,14 @@ class IndexStatisticsStoreTest
         Race race = new Race();
         int contestants = 20;
         int delta = 3;
-        store.replaceStats( indexId, 0, 0, 0 );
+        store.replaceStats( indexId, new IndexSample( 0, 0, 0 ) );
         race.addContestants( contestants, () -> store.incrementIndexUpdates( indexId, delta ), 1 );
 
         // when
         race.go();
 
         // then
-        assertRegister( contestants * delta, 0, store.indexUpdatesAndSize( indexId, newDoubleLongRegister() ) );
+        assertEquals( new IndexSample( 0, 0, 0, contestants * delta ), store.indexSample( indexId ) );
     }
 
     @Test
@@ -193,14 +235,14 @@ class IndexStatisticsStoreTest
             for ( int i = 0; i < 20; i++ )
             {
                 Thread.sleep( 5 );
-                store.checkpoint( IOLimiter.UNLIMITED );
+                store.checkpoint( UNLIMITED, PageCursorTracer.NULL );
             }
             checkpointDone.set( true );
         } ) );
         for ( int i = 0; i < indexes; i++ )
         {
             int indexId = i;
-            store.replaceStats( indexId, 0, 0, 0 );
+            store.replaceStats( indexId, new IndexSample( 0, 0, 0 ) );
             race.addContestants( contestantsPerIndex, () ->
             {
                 while ( !checkpointDone.get() )
@@ -217,19 +259,20 @@ class IndexStatisticsStoreTest
         // then
         for ( int i = 0; i < indexes; i++ )
         {
-            assertRegister( expected.get( i ), 0, store.indexUpdatesAndSize( i, newDoubleLongRegister() ) );
+            assertEquals( new IndexSample( 0, 0, 0, expected.get( i ) ), store.indexSample( i ) );
         }
         restartStore();
         for ( int i = 0; i < indexes; i++ )
         {
-            assertRegister( expected.get( i ), 0, store.indexUpdatesAndSize( i, newDoubleLongRegister() ) );
+            assertEquals( new IndexSample( 0, 0, 0, expected.get( i ) ), store.indexSample( i ) );
         }
     }
 
     @Test
     void shouldNotStartWithoutFileIfReadOnly()
     {
-        final IndexStatisticsStore indexStatisticsStore = new IndexStatisticsStore( pageCache, testDirectory.file( "non-existing" ), immediate(), true );
+        final IndexStatisticsStore indexStatisticsStore =
+                new IndexStatisticsStore( pageCache, testDirectory.file( "non-existing" ), immediate(), true, PageCacheTracer.NULL );
         final Exception e = assertThrows( Exception.class, indexStatisticsStore::init );
         assertTrue( Exceptions.contains( e, t -> t instanceof NoSuchFileException ) );
         assertTrue( Exceptions.contains( e, t -> t instanceof TreeFileNotFoundException ) );
@@ -239,7 +282,7 @@ class IndexStatisticsStoreTest
     @Test
     void shouldNotReplaceStatsIfReadOnly() throws IOException
     {
-        assertOperationThrowInReadOnlyMode( iss -> () -> iss.replaceStats( 1, 1, 1, 1 ) );
+        assertOperationThrowInReadOnlyMode( iss -> () -> iss.replaceStats( 1, new IndexSample( 1, 1, 1 ) ) );
     }
 
     @Test
@@ -259,7 +302,7 @@ class IndexStatisticsStoreTest
         final File file = testDirectory.file( "existing" );
 
         // Create store
-        IndexStatisticsStore store = new IndexStatisticsStore( pageCache, file, immediate(), false );
+        IndexStatisticsStore store = new IndexStatisticsStore( pageCache, file, immediate(), false, PageCacheTracer.NULL );
         try
         {
             store.init();
@@ -270,7 +313,7 @@ class IndexStatisticsStoreTest
         }
 
         // Start in readOnly mode
-        IndexStatisticsStore readOnlyStore = new IndexStatisticsStore( pageCache, file, immediate(), true );
+        IndexStatisticsStore readOnlyStore = new IndexStatisticsStore( pageCache, file, immediate(), true, PageCacheTracer.NULL );
         try
         {
             readOnlyStore.init();
@@ -283,9 +326,9 @@ class IndexStatisticsStoreTest
         }
     }
 
-    private static void assertRegister( long first, long second, DoubleLongRegister register )
+    private void replaceAndVerifySample( long indexId, IndexSample indexSample )
     {
-        assertEquals( first, register.readFirst() );
-        assertEquals( second, register.readSecond() );
+        store.replaceStats( indexId, indexSample );
+        assertEquals( indexSample, store.indexSample( indexId ) );
     }
 }

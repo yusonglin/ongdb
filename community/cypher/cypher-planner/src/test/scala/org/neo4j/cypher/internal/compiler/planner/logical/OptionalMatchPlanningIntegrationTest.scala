@@ -21,13 +21,34 @@ package org.neo4j.cypher.internal.compiler.planner.logical
 
 import org.neo4j.cypher.internal.compiler.planner.LogicalPlanningTestSupport2
 import org.neo4j.cypher.internal.compiler.planner.logical.plans.rewriter.unnestOptional
+import org.neo4j.cypher.internal.expressions.Ands
+import org.neo4j.cypher.internal.expressions.HasLabels
+import org.neo4j.cypher.internal.expressions.LabelName
+import org.neo4j.cypher.internal.expressions.RelTypeName
+import org.neo4j.cypher.internal.expressions.SemanticDirection
 import org.neo4j.cypher.internal.ir.SimplePatternLength
-import org.neo4j.cypher.internal.logical.plans._
+import org.neo4j.cypher.internal.logical.plans.AllNodesScan
+import org.neo4j.cypher.internal.logical.plans.Apply
+import org.neo4j.cypher.internal.logical.plans.Argument
+import org.neo4j.cypher.internal.logical.plans.CartesianProduct
+import org.neo4j.cypher.internal.logical.plans.Expand
+import org.neo4j.cypher.internal.logical.plans.ExpandAll
+import org.neo4j.cypher.internal.logical.plans.IndexOrderNone
+import org.neo4j.cypher.internal.logical.plans.LeftOuterHashJoin
+import org.neo4j.cypher.internal.logical.plans.Limit
+import org.neo4j.cypher.internal.logical.plans.LogicalPlan
+import org.neo4j.cypher.internal.logical.plans.NodeByLabelScan
+import org.neo4j.cypher.internal.logical.plans.Optional
+import org.neo4j.cypher.internal.logical.plans.OptionalExpand
+import org.neo4j.cypher.internal.logical.plans.ProjectEndpoints
+import org.neo4j.cypher.internal.logical.plans.Projection
+import org.neo4j.cypher.internal.logical.plans.RightOuterHashJoin
+import org.neo4j.cypher.internal.logical.plans.Selection
 import org.neo4j.cypher.internal.planner.spi.DelegatingGraphStatistics
-import org.neo4j.cypher.internal.v4_0.expressions.{Ands, HasLabels, LabelName, RelTypeName, SemanticDirection}
-import org.neo4j.cypher.internal.v4_0.util.Foldable._
-import org.neo4j.cypher.internal.v4_0.util.test_helpers.CypherFunSuite
-import org.neo4j.cypher.internal.v4_0.util.{Cardinality, LabelId, RelTypeId}
+import org.neo4j.cypher.internal.util.Cardinality
+import org.neo4j.cypher.internal.util.LabelId
+import org.neo4j.cypher.internal.util.RelTypeId
+import org.neo4j.cypher.internal.util.test_helpers.CypherFunSuite
 import org.neo4j.kernel.impl.util.dbstructure.DbStructureLargeOptionalMatchStructure
 import org.scalatest.Inside
 
@@ -46,8 +67,8 @@ class OptionalMatchPlanningIntegrationTest extends CypherFunSuite with LogicalPl
       }
     } getLogicalPlanFor "MATCH (a:X)-[r1]->(b) OPTIONAL MATCH (b)-[r2]->(c:Y) RETURN b")._2 should equal(
       LeftOuterHashJoin(Set("b"),
-        Expand(NodeByLabelScan("a", labelName("X"), Set.empty), "a", SemanticDirection.OUTGOING, Seq(), "b", "r1"),
-        Expand(NodeByLabelScan("c", labelName("Y"), Set.empty), "c", SemanticDirection.INCOMING, Seq(), "b", "r2")
+        Expand(NodeByLabelScan("a", labelName("X"), Set.empty, IndexOrderNone), "a", SemanticDirection.OUTGOING, Seq(), "b", "r1"),
+        Expand(NodeByLabelScan("c", labelName("Y"), Set.empty, IndexOrderNone), "c", SemanticDirection.INCOMING, Seq(), "b", "r2")
       )
     )
   }
@@ -65,8 +86,8 @@ class OptionalMatchPlanningIntegrationTest extends CypherFunSuite with LogicalPl
       }
     } getLogicalPlanFor "MATCH (a:X)-[r1]->(b) OPTIONAL MATCH (b)-[r2]->(c:Y) RETURN b")._2 should equal(
       RightOuterHashJoin(Set("b"),
-        Expand(NodeByLabelScan("c", labelName("Y"), Set.empty), "c", SemanticDirection.INCOMING, Seq(), "b", "r2"),
-        Expand(NodeByLabelScan("a", labelName("X"), Set.empty), "a", SemanticDirection.OUTGOING, Seq(), "b", "r1")
+        Expand(NodeByLabelScan("c", labelName("Y"), Set.empty, IndexOrderNone), "c", SemanticDirection.INCOMING, Seq(), "b", "r2"),
+        Expand(NodeByLabelScan("a", labelName("X"), Set.empty, IndexOrderNone), "a", SemanticDirection.OUTGOING, Seq(), "b", "r1")
       )
     )
   }
@@ -95,8 +116,8 @@ class OptionalMatchPlanningIntegrationTest extends CypherFunSuite with LogicalPl
       }
     } getLogicalPlanFor "MATCH (a:X)-[r1]->(b) OPTIONAL MATCH (b)-[r2]->(c:Y) RETURN b")._2 should equal(
       LeftOuterHashJoin(Set("b"),
-        Expand(NodeByLabelScan("a", labelName("X"), Set.empty), "a", SemanticDirection.OUTGOING, Seq(), "b", "r1"),
-        Expand(NodeByLabelScan("c", labelName("Y"), Set.empty), "c", SemanticDirection.INCOMING, Seq(), "b", "r2")
+        Expand(NodeByLabelScan("a", labelName("X"), Set.empty, IndexOrderNone), "a", SemanticDirection.OUTGOING, Seq(), "b", "r1"),
+        Expand(NodeByLabelScan("c", labelName("Y"), Set.empty, IndexOrderNone), "c", SemanticDirection.INCOMING, Seq(), "b", "r2")
       )
     )
   }
@@ -125,8 +146,8 @@ class OptionalMatchPlanningIntegrationTest extends CypherFunSuite with LogicalPl
       }
     } getLogicalPlanFor "MATCH (a:X)-[r1]->(b) OPTIONAL MATCH (b)-[r2]->(c:Y) RETURN b")._2 should equal(
       RightOuterHashJoin(Set("b"),
-        Expand(NodeByLabelScan("c", labelName("Y"), Set.empty), "c", SemanticDirection.INCOMING, Seq(), "b", "r2"),
-        Expand(NodeByLabelScan("a", labelName("X"), Set.empty), "a", SemanticDirection.OUTGOING, Seq(), "b", "r1")
+        Expand(NodeByLabelScan("c", labelName("Y"), Set.empty, IndexOrderNone), "c", SemanticDirection.INCOMING, Seq(), "b", "r2"),
+        Expand(NodeByLabelScan("a", labelName("X"), Set.empty, IndexOrderNone), "a", SemanticDirection.OUTGOING, Seq(), "b", "r1")
       )
     )
   }
@@ -162,6 +183,7 @@ class OptionalMatchPlanningIntegrationTest extends CypherFunSuite with LogicalPl
       "x",
       _,
       _,
+      _,
       _
       ) => ()
     }
@@ -173,7 +195,7 @@ class OptionalMatchPlanningIntegrationTest extends CypherFunSuite with LogicalPl
         Apply(
         Limit(
         Expand(
-        AllNodesScan("b1", _), _, _, _, _, _, _), _, _),
+        AllNodesScan("b1", _), _, _, _, _, _, _, _), _, _),
         Optional(
         ProjectEndpoints(
         Argument(args), "r", "b2", false, "a1", true, None, true, SimplePatternLength
@@ -187,7 +209,7 @@ class OptionalMatchPlanningIntegrationTest extends CypherFunSuite with LogicalPl
   test("should build optional ProjectEndpoints with extra predicates") {
     planFor("MATCH (a1)-[r]->(b1) WITH r, a1 LIMIT 1 OPTIONAL MATCH (a2)<-[r]-(b2) WHERE a1 = a2 RETURN a1, r, b2")._2 match {
       case Apply(
-      Limit(Expand(AllNodesScan("b1", _), _, _, _, _, _, _), _, _),
+      Limit(Expand(AllNodesScan("b1", _), _, _, _, _, _, _, _), _, _),
       Optional(
       Selection(
       predicates,
@@ -207,7 +229,7 @@ class OptionalMatchPlanningIntegrationTest extends CypherFunSuite with LogicalPl
   test("should build optional ProjectEndpoints with extra predicates 2") {
     planFor("MATCH (a1)-[r]->(b1) WITH r LIMIT 1 OPTIONAL MATCH (a2)-[r]->(b2) RETURN a2, r, b2")._2 match {
       case Apply(
-      Limit(Expand(AllNodesScan("b1", _), _, _, _, _, _, _), _, _),
+      Limit(Expand(AllNodesScan("b1", _), _, _, _, _, _, _, _), _, _),
       Optional(
       ProjectEndpoints(
       Argument(args),
@@ -240,7 +262,7 @@ class OptionalMatchPlanningIntegrationTest extends CypherFunSuite with LogicalPl
         |OPTIONAL MATCH (n)-[r]-(m:Y)
         |WHERE m.prop = 42
         |RETURN m""".stripMargin)._2.endoRewrite(unnestOptional)
-    val allNodesN: LogicalPlan = NodeByLabelScan("n", labelName("X"), Set.empty)
+    val allNodesN: LogicalPlan = NodeByLabelScan("n", labelName("X"), Set.empty, IndexOrderNone)
 
     plan should equal(
       OptionalExpand(allNodesN, "n", SemanticDirection.BOTH, Seq.empty, "m", "r", ExpandAll,
@@ -294,7 +316,8 @@ class OptionalMatchPlanningIntegrationTest extends CypherFunSuite with LogicalPl
         |RETURN *
       """.stripMargin
 
-    val (_, plan, _, _, cardinalities) = lom.getLogicalPlanFor(query)
+    val (_, plan, _, attributes) = lom.getLogicalPlanFor(query)
+    val cardinalities = attributes.cardinalities
     plan.treeExists {
       case plan: LogicalPlan =>
         cardinalities.get(plan.id) match {
@@ -326,7 +349,11 @@ class OptionalMatchPlanningIntegrationTest extends CypherFunSuite with LogicalPl
 
     val plan = cfg.getLogicalPlanFor(query)._2
     inside(plan) {
+<<<<<<< HEAD
       case Apply(_:Projection, Apply(_:AllNodesScan, Optional(Expand(Selection(_, AllNodesScan("c", arguments)), _, _, _, _, _, _), _))) =>
+=======
+      case Apply(_:Projection, Apply(_:AllNodesScan, Optional(Expand(Selection(_, AllNodesScan("c", arguments)), _, _, _, _, _, _, _), _))) =>
+>>>>>>> neo4j/4.1
         arguments should equal(Set("a", "x"))
     }
   }

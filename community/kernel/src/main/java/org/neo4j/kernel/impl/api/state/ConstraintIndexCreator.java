@@ -31,14 +31,12 @@ import org.neo4j.internal.kernel.api.SchemaRead;
 import org.neo4j.internal.kernel.api.exceptions.TransactionFailureException;
 import org.neo4j.internal.kernel.api.exceptions.schema.CreateConstraintFailureException;
 import org.neo4j.internal.kernel.api.exceptions.schema.IndexNotFoundKernelException;
-import org.neo4j.internal.kernel.api.exceptions.schema.SchemaKernelException;
 import org.neo4j.internal.schema.IndexDescriptor;
 import org.neo4j.internal.schema.IndexPrototype;
 import org.neo4j.internal.schema.SchemaDescriptor;
 import org.neo4j.internal.schema.constraints.IndexBackedConstraintDescriptor;
 import org.neo4j.kernel.api.Kernel;
 import org.neo4j.kernel.api.KernelTransaction;
-import org.neo4j.kernel.api.SilentTokenNameLookup;
 import org.neo4j.kernel.api.exceptions.Status;
 import org.neo4j.kernel.api.exceptions.index.IndexEntryConflictException;
 import org.neo4j.kernel.api.exceptions.index.IndexPopulationFailedKernelException;
@@ -105,8 +103,7 @@ public class ConstraintIndexCreator
         SchemaRead schemaRead = transaction.schemaRead();
         try
         {
-            SilentTokenNameLookup tokenLookup = new SilentTokenNameLookup( transaction.tokenRead() );
-            index = checkAndCreateConstraintIndex( schemaRead, tokenLookup, constraint, prototype );
+            index = checkAndCreateConstraintIndex( schemaRead, transaction.tokenRead(), constraint, prototype );
         }
         catch ( AlreadyConstrainedException e )
         {
@@ -143,7 +140,8 @@ public class ConstraintIndexCreator
             locks.acquireExclusive( transaction.lockTracer(), keyType, lockingKeys );
             reacquiredLabelLock = true;
 
-            try ( NodePropertyAccessor propertyAccessor = new DefaultNodePropertyAccessor( transaction.newStorageReader() ) )
+            try ( NodePropertyAccessor propertyAccessor = new DefaultNodePropertyAccessor( transaction.newStorageReader(), transaction.pageCursorTracer(),
+                    transaction.memoryTracker() ) )
             {
                 indexingService.getIndexProxy( index ).verifyDeferredConstraints( propertyAccessor );
             }
@@ -158,7 +156,7 @@ public class ConstraintIndexCreator
         }
         catch ( IndexEntryConflictException e )
         {
-            throw new UniquePropertyValueValidationException( constraint, VERIFICATION, e );
+            throw new UniquePropertyValueValidationException( constraint, VERIFICATION, e, transaction.tokenRead() );
         }
         catch ( InterruptedException | IOException e )
         {
@@ -193,7 +191,7 @@ public class ConstraintIndexCreator
     public void dropUniquenessConstraintIndex( IndexDescriptor index )
             throws TransactionFailureException
     {
-        try ( KernelTransaction transaction = kernelSupplier.get().beginTransaction( Type.implicit, AUTH_DISABLED ) )
+        try ( KernelTransaction transaction = kernelSupplier.get().beginTransaction( Type.IMPLICIT, AUTH_DISABLED ) )
         {
             ((KernelTransactionImplementation)transaction).addIndexDoDropToTxState( index );
             transaction.commit();
@@ -223,11 +221,12 @@ public class ConstraintIndexCreator
             Throwable cause = e.getCause();
             if ( cause instanceof IndexEntryConflictException )
             {
-                throw new UniquePropertyValueValidationException( constraint, VERIFICATION, (IndexEntryConflictException) cause );
+                throw new UniquePropertyValueValidationException( constraint, VERIFICATION, (IndexEntryConflictException) cause,
+                        transaction.tokenRead() );
             }
             else
             {
-                throw new UniquePropertyValueValidationException( constraint, VERIFICATION, e );
+                throw new UniquePropertyValueValidationException( constraint, VERIFICATION, e, transaction.tokenRead() );
             }
         }
     }
@@ -245,14 +244,14 @@ public class ConstraintIndexCreator
                 throw new AlreadyConstrainedException( constraint, CONSTRAINT_CREATION, tokenLookup );
             }
             // There's already an index for the schema of this constraint, which isn't of the type we're after.
-            throw new AlreadyIndexedException( constraint.schema(), CONSTRAINT_CREATION );
+            throw new AlreadyIndexedException( constraint.schema(), CONSTRAINT_CREATION, tokenLookup );
         }
         return createConstraintIndex( prototype );
     }
 
     public IndexDescriptor createConstraintIndex( IndexPrototype prototype ) throws KernelException
     {
-        try ( KernelTransaction transaction = kernelSupplier.get().beginTransaction( Type.implicit, AUTH_DISABLED ) )
+        try ( KernelTransaction transaction = kernelSupplier.get().beginTransaction( Type.IMPLICIT, AUTH_DISABLED ) )
         {
             IndexDescriptor index = transaction.indexUniqueCreate( prototype );
             transaction.commit();

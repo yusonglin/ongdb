@@ -20,8 +20,10 @@
 package org.neo4j.cypher.internal.compiler.planner.logical.steps
 
 import org.neo4j.cypher.internal.compiler.planner.LogicalPlanningTestSupport2
-import org.neo4j.cypher.internal.logical.plans.{NodeByLabelScan, NodeHashJoin, Selection}
-import org.neo4j.cypher.internal.v4_0.util.test_helpers.CypherFunSuite
+import org.neo4j.cypher.internal.logical.plans.NodeByLabelScan
+import org.neo4j.cypher.internal.logical.plans.NodeHashJoin
+import org.neo4j.cypher.internal.logical.plans.Selection
+import org.neo4j.cypher.internal.util.test_helpers.CypherFunSuite
 
 class SelectHasLabelWithJoinTest extends CypherFunSuite with LogicalPlanningTestSupport2 {
   test("should solve labels with joins") {
@@ -37,9 +39,9 @@ class SelectHasLabelWithJoinTest extends CypherFunSuite with LogicalPlanningTest
     plan._2 match {
       case NodeHashJoin(_,
       NodeHashJoin(_,
-      NodeByLabelScan(_, _, _),
-      NodeByLabelScan(_, _, _)),
-      NodeByLabelScan(_, _, _)) => ()
+      NodeByLabelScan(_, _, _, _),
+      NodeByLabelScan(_, _, _, _)),
+      NodeByLabelScan(_, _, _, _)) => ()
       case _ => fail("Not what we expected!")
     }
   }

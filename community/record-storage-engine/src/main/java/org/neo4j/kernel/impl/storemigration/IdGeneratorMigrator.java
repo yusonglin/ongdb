@@ -43,6 +43,8 @@ import org.neo4j.io.layout.DatabaseFile;
 import org.neo4j.io.layout.DatabaseLayout;
 import org.neo4j.io.pagecache.PageCache;
 import org.neo4j.io.pagecache.PageCursor;
+import org.neo4j.io.pagecache.tracing.PageCacheTracer;
+import org.neo4j.io.pagecache.tracing.cursor.PageCursorTracer;
 import org.neo4j.kernel.impl.store.NeoStores;
 import org.neo4j.kernel.impl.store.RecordStore;
 import org.neo4j.kernel.impl.store.StoreFactory;
@@ -53,6 +55,7 @@ import org.neo4j.kernel.impl.store.record.RecordLoad;
 import org.neo4j.logging.NullLogProvider;
 import org.neo4j.storageengine.migration.AbstractStoreMigrationParticipant;
 
+import static org.eclipse.collections.api.factory.Sets.immutable;
 import static org.neo4j.index.internal.gbptree.RecoveryCleanupWorkCollector.immediate;
 import static org.neo4j.kernel.impl.store.format.RecordFormatSelector.selectForVersion;
 import static org.neo4j.kernel.impl.store.format.RecordStorageCapability.GBPTREE_ID_FILES;
@@ -61,16 +64,19 @@ import static org.neo4j.kernel.impl.storemigration.StoreMigratorFileOperation.fi
 
 public class IdGeneratorMigrator extends AbstractStoreMigrationParticipant
 {
+    public static final String ID_GENERATOR_MIGRATION_TAG = "idGeneratorMigration";
     private final FileSystemAbstraction fileSystem;
     private final PageCache pageCache;
     private final Config config;
+    private final PageCacheTracer cacheTracer;
 
-    public IdGeneratorMigrator( FileSystemAbstraction fileSystem, PageCache pageCache, Config config )
+    public IdGeneratorMigrator( FileSystemAbstraction fileSystem, PageCache pageCache, Config config, PageCacheTracer cacheTracer )
     {
         super( "Id files" );
         this.fileSystem = fileSystem;
         this.pageCache = pageCache;
         this.config = config;
+        this.cacheTracer = cacheTracer;
     }
 
     @Override
@@ -81,12 +87,15 @@ public class IdGeneratorMigrator extends AbstractStoreMigrationParticipant
         RecordFormats newFormat = selectForVersion( versionToMigrateTo );
         if ( requiresIdFilesMigration( oldFormat, newFormat ) )
         {
-            migrateIdFiles( directoryLayout, migrationLayout, oldFormat, newFormat );
+            try ( var cursorTracer = cacheTracer.createPageCursorTracer( ID_GENERATOR_MIGRATION_TAG ) )
+            {
+                migrateIdFiles( directoryLayout, migrationLayout, oldFormat, newFormat, cursorTracer );
+            }
         }
     }
 
-    private void migrateIdFiles( DatabaseLayout directoryLayout, DatabaseLayout migrationLayout, RecordFormats oldFormat, RecordFormats newFormat )
-        throws IOException
+    private void migrateIdFiles( DatabaseLayout directoryLayout, DatabaseLayout migrationLayout, RecordFormats oldFormat, RecordFormats newFormat,
+            PageCursorTracer cursorTracer ) throws IOException
     {
         // The store .id files needs to be migrated. At this point some of them have been sort-of-migrated, i.e. merely ported
         // to the new format, but just got the highId and nothing else. Regardless we want to do a proper migration here,
@@ -114,8 +123,8 @@ public class IdGeneratorMigrator extends AbstractStoreMigrationParticipant
         try ( NeoStores stores = createStoreFactory( directoryLayout, oldFormat, new ScanOnOpenReadOnlyIdGeneratorFactory() ).openNeoStores(
                 storesInDbDirectory.toArray( StoreType[]::new ) ) )
         {
-            stores.start();
-            buildIdFiles( migrationLayout, storesInDbDirectory, rebuiltIdGenerators, renameList, stores );
+            stores.start( cursorTracer );
+            buildIdFiles( migrationLayout, storesInDbDirectory, rebuiltIdGenerators, renameList, stores, cursorTracer );
         }
         // Build the ones from the migration directory, those stores that have been migrated
         // Before doing this we will have to create empty stores for those that are missing, otherwise some of the stores
@@ -126,8 +135,8 @@ public class IdGeneratorMigrator extends AbstractStoreMigrationParticipant
         try ( NeoStores stores = createStoreFactory( migrationLayout, newFormat, new ScanOnOpenReadOnlyIdGeneratorFactory() )
                 .openNeoStores( storesInMigrationDirectory.toArray( StoreType[]::new ) ) )
         {
-            stores.start();
-            buildIdFiles( migrationLayout, storesInMigrationDirectory, rebuiltIdGenerators, renameList, stores );
+            stores.start( cursorTracer );
+            buildIdFiles( migrationLayout, storesInMigrationDirectory, rebuiltIdGenerators, renameList, stores, cursorTracer );
         }
         for ( File emptyPlaceHolderStoreFile : placeHolderStoreFiles )
         {
@@ -159,7 +168,7 @@ public class IdGeneratorMigrator extends AbstractStoreMigrationParticipant
     }
 
     private void buildIdFiles( DatabaseLayout layout, List<StoreType> storeTypes, IdGeneratorFactory rebuiltIdGenerators,
-        List<Pair<File,File>> renameMap, NeoStores stores )
+        List<Pair<File,File>> renameMap, NeoStores stores, PageCursorTracer cursorTracer )
     {
         for ( StoreType storeType : storeTypes )
         {
@@ -169,10 +178,11 @@ public class IdGeneratorMigrator extends AbstractStoreMigrationParticipant
             File idFile = new File( actualIdFile.getAbsolutePath() + ".new" );
             renameMap.add( Pair.of( idFile, actualIdFile ) );
             boolean readOnly = config.get( GraphDatabaseSettings.read_only );
-            try ( PageCursor cursor = store.openPageCursorForReading( store.getNumberOfReservedLowIds() );
+            try ( PageCursor cursor = store.openPageCursorForReading( store.getNumberOfReservedLowIds(), cursorTracer );
                     // about maxId: let's not concern ourselves with maxId here; if it's in the store it can be in the id generator
-                  IdGenerator idGenerator = rebuiltIdGenerators.create( pageCache, idFile, storeType.getIdType(), highId, true, Long.MAX_VALUE, readOnly );
-                    Marker marker = idGenerator.marker() )
+                  IdGenerator idGenerator = rebuiltIdGenerators.create( pageCache, idFile, storeType.getIdType(), highId, true, Long.MAX_VALUE,
+                            readOnly, cursorTracer, immutable.empty() );
+                  Marker marker = idGenerator.marker( cursorTracer ) )
             {
                 AbstractBaseRecord record = store.newRecord();
                 for ( long id = 0; id < highId; id++ )
@@ -195,7 +205,8 @@ public class IdGeneratorMigrator extends AbstractStoreMigrationParticipant
 
     private StoreFactory createStoreFactory( DatabaseLayout databaseLayout, RecordFormats formats, IdGeneratorFactory idGeneratorFactory )
     {
-        return new StoreFactory( databaseLayout, config, idGeneratorFactory, pageCache, fileSystem, formats, NullLogProvider.getInstance() );
+        return new StoreFactory( databaseLayout, config, idGeneratorFactory, pageCache, fileSystem, formats, NullLogProvider.getInstance(), cacheTracer,
+                immutable.empty() );
     }
 
     @Override
